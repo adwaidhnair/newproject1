@@ -7,7 +7,8 @@ import {
 } from "lucide-react";
 import { tv } from "tailwind-variants";
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:8000/api/v1";
+const API = (import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api/v1").replace(/\/$/, "");
+const API_KEY = import.meta.env.VITE_API_KEY || "";
 const NAV = [
   { id: "control", label: "Control Tower", icon: Gauge },
   { id: "risk", label: "Risk & AI Actions", icon: Sparkles },
@@ -24,7 +25,9 @@ const money = (value) =>
 const dateLabel = (value) => value ? new Date(value).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 
 async function api(path, options = {}) {
-  const response = await fetch(`${API}${path}`, options);
+  const headers = new Headers(options.headers || {});
+  if (API_KEY) headers.set("X-API-Key", API_KEY);
+  const response = await fetch(`${API}${path}`, { ...options, headers });
   if (!response.ok) {
     let message = `Request failed (${response.status})`;
     try { message = (await response.json()).detail || message; } catch { /* no JSON body */ }

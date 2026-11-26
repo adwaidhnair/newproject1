@@ -1,9 +1,13 @@
 import csv
 import io
 from datetime import date, datetime
+from pathlib import Path
+from sqlalchemy.exc import IntegrityError
 
 from app.engines.rules_engine import evaluate_rules
 from app.models.erp_models import DataImport, Location, PurchaseOrder
+
+MAX_CSV_BYTES = 10 * 1024 * 1024
 
 
 class BaseConnector:
@@ -32,7 +36,11 @@ class CSVConnector(BaseConnector):
     @staticmethod
     def _rows(content, mapping):
         if isinstance(content, bytes):
+            if len(content) > MAX_CSV_BYTES:
+                raise ValueError("CSV exceeds the 10 MiB upload limit.")
             content = content.decode("utf-8-sig")
+        elif len(content.encode("utf-8")) > MAX_CSV_BYTES:
+            raise ValueError("CSV exceeds the 10 MiB upload limit.")
         reader = csv.DictReader(io.StringIO(content))
         if not reader.fieldnames:
             raise ValueError("CSV must include a header row.")
@@ -44,6 +52,9 @@ class CSVConnector(BaseConnector):
         errors = []
         seen = set()
         for line, source in enumerate(reader, start=2):
+            if None in source:
+                errors.append({"row": line, "error": "Row has more columns than the CSV header."})
+                continue
             row = {
                 target: (source.get(column) or "").strip()
                 for column, target in mapping.items()
@@ -59,6 +70,17 @@ class CSVConnector(BaseConnector):
                 for field in CSVConnector.REQUIRED:
                     if not row.get(field):
                         raise ValueError(f"Missing value for {field}")
+                allowed_fields = (
+                    CSVConnector.REQUIRED
+                    | CSVConnector.DATE_FIELDS
+                    | CSVConnector.FLOAT_FIELDS
+                    | {"dept_id"}
+                )
+                unsupported = set(row) - allowed_fields
+                if unsupported:
+                    raise ValueError(
+                        f"Unsupported target fields: {', '.join(sorted(unsupported))}"
+                    )
                 for field in CSVConnector.FLOAT_FIELDS:
                     if row.get(field):
                         row[field] = float(row[field])
@@ -67,6 +89,10 @@ class CSVConnector(BaseConnector):
                         row[field] = date.fromisoformat(row[field])
                 if row["quantity"] <= 0 or row["unit_price"] < 0 or row["total_amount"] < 0:
                     raise ValueError("quantity must be positive and amounts cannot be negative")
+                if "approval_days" in row and row["approval_days"] < 0:
+                    raise ValueError("approval_days cannot be negative")
+                if row["total_amount"] != round(row["quantity"] * row["unit_price"], 2):
+                    raise ValueError("total_amount must equal quantity multiplied by unit_price")
                 result.append(row)
             except (ValueError, TypeError) as exc:
                 errors.append({"row": line, "error": str(exc)})
@@ -88,6 +114,8 @@ class CSVConnector(BaseConnector):
 
     def ingest(self, db, org_id, content, file_name, mapping, imported_by=None):
         rows, errors = self._rows(content, mapping)
+        file_name = Path(file_name or "upload.csv").name[:255]
+        imported_by = imported_by[:255] if imported_by else None
         locations = {
             location.id
             for location in db.query(Location).filter(Location.org_id == org_id).all()
@@ -121,7 +149,13 @@ class CSVConnector(BaseConnector):
             created_at=datetime.utcnow(),
         )
         db.add(audit)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise ValueError(
+                "A purchase order number already exists for this organization."
+            ) from None
         return {
             "import_id": audit.id,
             "records_processed": processed,

@@ -30,7 +30,7 @@ backend/
 docs/                        Sample ERP exports and product documentation
 ```
 
-The browser calls the versioned API at `http://localhost:8000/api/v1` by default. Set `VITE_API_URL` to point the UI at another API origin. Tenant IDs scope business queries; CSV imports additionally validate that referenced locations belong to the selected tenant. SQLite is convenient for local development. SQLAlchemy JSON fields and portable model definitions support a future PostgreSQL deployment.
+The browser calls the versioned API at `http://localhost:8000/api/v1` by default. Set `VITE_API_URL` to point the UI at another API origin. Tenant IDs scope business queries; CSV imports additionally validate that referenced locations belong to the selected tenant. SQLite is convenient for local development; production should use PostgreSQL.
 
 ## Local development
 
@@ -81,10 +81,59 @@ The Data Import view accepts CSV uploads. Map source headers to canonical field 
 
 See [`docs/sample_erp_pos.csv`](docs/sample_erp_pos.csv) for the sample header and row.
 
+## Deployment baseline
+
+The backend accepts `DATABASE_URL`, `ERP_API_KEY`, `CORS_ORIGINS`,
+`ENVIRONMENT`, and `AUTO_CREATE_TABLES` from the environment. Copy
+`backend/.env.example` for local development. Never commit real secrets.
+For deployment, use PostgreSQL with backups and restricted network access,
+serve the API behind a TLS-terminating reverse proxy, and provide a long
+randomly generated API key through a deployment secret manager. Since the
+browser must send this API key directly, the Vite `VITE_API_KEY` option is for
+local/private deployments only; never put a production shared secret in
+frontend build variables. Production browser access should use an authenticated
+backend-for-frontend or an identity-provider flow with per-user authorization.
+Requests to
+`/api/v1/*` require that key in `X-API-Key` or a Bearer authorization header
+when configured. In production mode, missing API-key configuration fails
+closed and interactive API docs are disabled.
+
+The repository includes `backend/Dockerfile`, `docker-compose.yml`, and Alembic
+migrations. Set `POSTGRES_PASSWORD`, `ERP_API_KEY`, and `CORS_ORIGINS` in the
+deployment environment, then initialize a new database with:
+
+```bash
+cd backend
+alembic upgrade head
+```
+
+The compose API port is bound to loopback and should only be exposed behind a
+trusted TLS reverse proxy. `AUTO_CREATE_TABLES=false` is used for container deployments so schema changes
+are applied deliberately through migrations. The initial schema and
+tenant-scoped PO/invoice uniqueness migrations are included. Back up production
+data before migrating. Compose is a starting point, not a substitute for
+HTTPS termination, managed secrets, database backups, monitoring, and network
+restrictions.
+
+## Security and production-readiness boundary
+
+The API-key mechanism is a shared-secret baseline, not user identity,
+role-based authorization, or enterprise SSO. Do not expose sensitive
+multi-tenant data to untrusted users until an identity provider is integrated
+and tenant access is authorized against each user's membership. Store secrets
+outside the repository, restrict API network access to trusted clients/proxy,
+and rotate credentials.
+
+Before production launch, add identity-provider-backed authorization,
+rate-limiting and abuse controls, structured audit trails for administrative
+changes, monitoring and alerting, tested backup restoration, and a deployment
+pipeline with dependency/image scanning. Validate tenant isolation for every
+new route and migration using a staging copy of production data.
+
 ## Roadmap
 
-1. **Identity and access** — SSO/OIDC, role-based authorization, organization membership, and immutable action audit history.
-2. **Production data platform** — PostgreSQL migrations, tenant isolation policies, secrets/configuration management, backups and observability.
+1. **Identity and access** — Complete SSO/OIDC, role-based authorization, organization membership, and immutable action audit history; current API-key support is only a deployment baseline.
+2. **Production data platform** — Operate PostgreSQL migrations, enforce tenant isolation policies, and establish secrets management, backups, restore drills, and observability.
 3. **Reliable ingestion** — ERP-specific connectors, asynchronous imports, schema mapping templates, row-level reconciliation and retry/dead-letter handling.
 4. **Richer intelligence** — calibrated risk scoring, forecasted stockout and delivery risk, confidence explanations and feedback from resolved exceptions.
 5. **Governed automation** — workflow versioning, approval gates, dry runs, event-driven execution and delivery observability.

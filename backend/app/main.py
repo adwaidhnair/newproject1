@@ -1,13 +1,17 @@
 import json
+import os
+from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.connectors.csv_connector import CSVConnector
 from app.core.database import Base, engine, get_db
+from app.core.security import get_configured_api_key, require_api_key
 from app.engines.intelligence_engine import build_intelligence
 from app.engines.kpi_engine import compute_kpis
 from app.engines.process_mining_engine import analyze_process, simulate_improvements
@@ -25,16 +29,61 @@ from app.models.erp_models import (
     PurchaseOrder,
 )
 
-Base.metadata.create_all(bind=engine)
-app = FastAPI(title="Enterprise ERP Operations Intelligence Platform", version="1.0.0")
+@asynccontextmanager
+async def lifespan(_app):
+    get_configured_api_key()
+    if os.getenv("AUTO_CREATE_TABLES", "true").lower() in {"1", "true", "yes"}:
+        Base.metadata.create_all(bind=engine)
+    yield
+
+
+app = FastAPI(
+    title="Enterprise ERP Operations Intelligence Platform",
+    version="1.0.0",
+    docs_url=None if os.getenv("ENVIRONMENT", "development").lower() in {"production", "prod"} else "/docs",
+    redoc_url=None if os.getenv("ENVIRONMENT", "development").lower() in {"production", "prod"} else "/redoc",
+    lifespan=lifespan,
+)
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_credentials=True,
+    allow_origins=cors_origins,
+    allow_credentials="*" not in cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 csv_connector = CSVConnector()
+
+
+@app.middleware("http")
+async def authenticate_api_requests(request, call_next):
+    if request.url.path.startswith("/api/v1/"):
+        try:
+            require_api_key(request.headers.get("authorization"), request.headers.get("x-api-key"))
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def limit_request_body_size(request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > 10 * 1024 * 1024:
+                return JSONResponse(status_code=413, content={"detail": "Request body exceeds 10 MiB"})
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header"})
+    if request.url.path.startswith("/api/v1/connectors/csv/") and not content_length:
+        return JSONResponse(
+            status_code=411,
+            content={"detail": "Content-Length is required for CSV uploads"},
+        )
+    return await call_next(request)
 
 
 class RuleUpdate(BaseModel):
@@ -62,6 +111,13 @@ def _not_found_or_tenant(db, model, record_id, org_id):
     if not record:
         raise HTTPException(status_code=404, detail="Record not found for this organization")
     return record
+
+
+def _validate_location(db, org_id, location_id):
+    if location_id and not db.query(Location.id).filter(
+        Location.id == location_id, Location.org_id == org_id
+    ).first():
+        raise HTTPException(status_code=404, detail="Location not found for this organization")
 
 
 @app.get("/api/v1/bootstrap")
@@ -110,6 +166,7 @@ def organization_industry(org_id: str, db: Session = Depends(get_db)):
 def control_tower(org_id: str, location_id: Optional[str] = None, db: Session = Depends(get_db)):
     if not db.query(Organization.id).filter(Organization.id == org_id).first():
         raise HTTPException(status_code=404, detail="Organization not found")
+    _validate_location(db, org_id, location_id)
     return compute_kpis(db, org_id, location_id)
 
 
@@ -117,6 +174,7 @@ def control_tower(org_id: str, location_id: Optional[str] = None, db: Session = 
 def intelligence(org_id: str, location_id: Optional[str] = None, db: Session = Depends(get_db)):
     if not db.query(Organization.id).filter(Organization.id == org_id).first():
         raise HTTPException(status_code=404, detail="Organization not found")
+    _validate_location(db, org_id, location_id)
     return build_intelligence(db, org_id, location_id)
 
 
@@ -237,6 +295,7 @@ def imports(org_id: str, db: Session = Depends(get_db)):
 def procurement(org_id: str, location_id: Optional[str] = None, db: Session = Depends(get_db)):
     if not db.query(Organization.id).filter(Organization.id == org_id).first():
         raise HTTPException(status_code=404, detail="Organization not found")
+    _validate_location(db, org_id, location_id)
     query = db.query(PurchaseOrder).filter(PurchaseOrder.org_id == org_id)
     if location_id:
         query = query.filter(PurchaseOrder.location_id == location_id)
@@ -249,6 +308,7 @@ def inventory_invoices(
 ):
     if not db.query(Organization.id).filter(Organization.id == org_id).first():
         raise HTTPException(status_code=404, detail="Organization not found")
+    _validate_location(db, org_id, location_id)
     inventory_query = db.query(InventorySnapshot).filter(InventorySnapshot.org_id == org_id)
     invoice_query = db.query(Invoice).filter(Invoice.org_id == org_id)
     if location_id:
@@ -270,7 +330,10 @@ async def _upload_payload(file: UploadFile, mapping: str):
         for key, value in parsed_mapping.items()
     ):
         raise HTTPException(status_code=422, detail="mapping must map CSV column names to model fields")
-    return await file.read(), parsed_mapping
+    content = await file.read(10 * 1024 * 1024 + 1)
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="CSV exceeds the 10 MiB upload limit")
+    return content, parsed_mapping
 
 
 @app.post("/api/v1/connectors/csv/preview")
@@ -278,8 +341,8 @@ async def csv_preview(
     file: UploadFile = File(...),
     mapping: str = Form(...),
 ):
-    content, parsed_mapping = await _upload_payload(file, mapping)
     try:
+        content, parsed_mapping = await _upload_payload(file, mapping)
         return csv_connector.preview(content, parsed_mapping)
     except (UnicodeDecodeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -295,8 +358,8 @@ async def csv_ingest(
 ):
     if not db.query(Organization.id).filter(Organization.id == org_id).first():
         raise HTTPException(status_code=404, detail="Organization not found")
-    content, parsed_mapping = await _upload_payload(file, mapping)
     try:
+        content, parsed_mapping = await _upload_payload(file, mapping)
         return csv_connector.ingest(
             db,
             org_id,

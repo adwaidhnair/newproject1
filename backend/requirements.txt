@@ -2,3 +2,5 @@ fastapi
 uvicorn
 sqlalchemy
 python-multipart
+psycopg[binary]>=3.2,<4
+alembic

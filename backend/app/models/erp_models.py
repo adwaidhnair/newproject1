@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, JSON, String
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, String
 
 from app.core.database import Base
 
@@ -39,6 +39,9 @@ class Department(Base):
 
 class PurchaseOrder(Base):
     __tablename__ = "purchase_orders"
+    __table_args__ = (
+        Index("uq_purchase_orders_org_po_number", "org_id", "po_number", unique=True),
+    )
 
     id = Column(String(36), primary_key=True, default=new_id)
     org_id = Column(String(36), ForeignKey("organizations.id"), nullable=False, index=True)
@@ -77,6 +80,9 @@ class InventorySnapshot(Base):
 
 class Invoice(Base):
     __tablename__ = "invoices"
+    __table_args__ = (
+        Index("uq_invoices_org_invoice_number", "org_id", "invoice_number", unique=True),
+    )
 
     id = Column(String(36), primary_key=True, default=new_id)
     org_id = Column(String(36), ForeignKey("organizations.id"), nullable=False, index=True)
