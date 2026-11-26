@@ -1,0 +1,2 @@
+po_number,location_id,vendor_name,item_code,item_description,quantity,unit_price,total_amount,order_date,expected_delivery_date,actual_delivery_date,approval_days
+APX-PO-2025-0143,249e3839-b758-4059-8cb6-cad11becf5a6,Malabar Packaging Industries,PKG-1L,1 litre beverage bottles,24000,3.1,74400,2025-02-01,2025-02-15,2025-02-18,4

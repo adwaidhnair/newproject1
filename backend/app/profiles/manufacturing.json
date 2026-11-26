@@ -1,0 +1,47 @@
+{
+  "industry_type": "MANUFACTURING",
+  "terminology": {
+    "item": "Part",
+    "location": "Plant",
+    "vendor": "Supplier",
+    "order": "Purchase order"
+  },
+  "default_rules": [
+    {
+      "rule_code": "PO_LATE_DELIVERY",
+      "rule_name": "Late supplier delivery",
+      "module": "PROCUREMENT",
+      "metric": "delivery_delay_days",
+      "operator": ">",
+      "threshold_value": 0,
+      "severity": "HIGH"
+    },
+    {
+      "rule_code": "PO_APPROVAL_DELAY",
+      "rule_name": "Purchase approval delay",
+      "module": "PROCUREMENT",
+      "metric": "approval_days",
+      "operator": ">",
+      "threshold_value": 3,
+      "severity": "MEDIUM"
+    },
+    {
+      "rule_code": "INV_BELOW_REORDER",
+      "rule_name": "Stock below reorder level",
+      "module": "INVENTORY",
+      "metric": "stock_on_hand_vs_reorder_level",
+      "operator": "<",
+      "threshold_value": 1,
+      "severity": "CRITICAL"
+    },
+    {
+      "rule_code": "AP_OVERBILLING",
+      "rule_name": "Invoice exceeds PO value",
+      "module": "FINANCE",
+      "metric": "invoice_vs_po_amount",
+      "operator": ">",
+      "threshold_value": 0,
+      "severity": "CRITICAL"
+    }
+  ]
+}
