@@ -7,12 +7,17 @@ from sqlalchemy import create_engine, engine_from_config, pool
 
 from app.core.database import Base
 from app.models import erp_models  # noqa: F401 — register all model metadata
+from app.models import auth_models  # noqa: F401 — register auth model metadata
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 database_url = os.getenv("DATABASE_URL", config.get_main_option("sqlalchemy.url"))
+if database_url.startswith(("postgres://", "postgresql://")):
+    database_url = database_url.replace(
+        "postgres://", "postgresql+psycopg://", 1
+    ).replace("postgresql://", "postgresql+psycopg://", 1)
 if database_url.startswith("sqlite:///") and database_url != "sqlite:///:memory:":
     database_path = Path(database_url.removeprefix("sqlite:///").split("?", 1)[0])
     if not database_path.is_absolute():

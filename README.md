@@ -83,52 +83,29 @@ See [`docs/sample_erp_pos.csv`](docs/sample_erp_pos.csv) for the sample header a
 
 ## Deployment baseline
 
-The backend accepts `DATABASE_URL`, `ERP_API_KEY`, `CORS_ORIGINS`,
-`ENVIRONMENT`, and `AUTO_CREATE_TABLES` from the environment. Copy
-`backend/.env.example` for local development. Never commit real secrets.
-For deployment, use PostgreSQL with backups and restricted network access,
-serve the API behind a TLS-terminating reverse proxy, and provide a long
-randomly generated API key through a deployment secret manager. Since the
-browser must send this API key directly, the Vite `VITE_API_KEY` option is for
-local/private deployments only; never put a production shared secret in
-frontend build variables. Production browser access should use an authenticated
-backend-for-frontend or an identity-provider flow with per-user authorization.
-Requests to
-`/api/v1/*` require that key in `X-API-Key` or a Bearer authorization header
-when configured. In production mode, missing API-key configuration fails
-closed and interactive API docs are disabled.
+For a small demo, [`render.yaml`](render.yaml) configures the API for Render,
+and [`docs/deployment-vercel-render-neon.md`](docs/deployment-vercel-render-neon.md)
+walks through deploying the frontend to Vercel and using Neon for PostgreSQL.
+The free Render service may sleep when idle; free-plan limits and availability
+can change. This setup is for demo data only, not sensitive business records or
+production workloads.
 
-The repository includes `backend/Dockerfile`, `docker-compose.yml`, and Alembic
-migrations. Set `POSTGRES_PASSWORD`, `ERP_API_KEY`, and `CORS_ORIGINS` in the
-deployment environment, then initialize a new database with:
-
-```bash
-cd backend
-alembic upgrade head
-```
-
-The compose API port is bound to loopback and should only be exposed behind a
-trusted TLS reverse proxy. `AUTO_CREATE_TABLES=false` is used for container deployments so schema changes
-are applied deliberately through migrations. The initial schema and
-tenant-scoped PO/invoice uniqueness migrations are included. Back up production
-data before migrating. Compose is a starting point, not a substitute for
-HTTPS termination, managed secrets, database backups, monitoring, and network
-restrictions.
+The backend accepts `DATABASE_URL`, `AUTH_TOKEN_SECRET`,
+`BOOTSTRAP_SETUP_TOKEN`, `CORS_ORIGINS`, `ENVIRONMENT`, and
+`AUTO_CREATE_TABLES`. Keep secrets in the hosting provider's secret settings;
+never commit them or place them in Vite build variables. Render runs the
+Alembic migrations at startup and disables automatic table creation.
+`docker-compose.yml` remains available for self-managed deployments.
 
 ## Security and production-readiness boundary
 
-The API-key mechanism is a shared-secret baseline, not user identity,
-role-based authorization, or enterprise SSO. Do not expose sensitive
-multi-tenant data to untrusted users until an identity provider is integrated
-and tenant access is authorized against each user's membership. Store secrets
-outside the repository, restrict API network access to trusted clients/proxy,
-and rotate credentials.
-
-Before production launch, add identity-provider-backed authorization,
-rate-limiting and abuse controls, structured audit trails for administrative
-changes, monitoring and alerting, tested backup restoration, and a deployment
-pipeline with dependency/image scanning. Validate tenant isolation for every
-new route and migration using a staging copy of production data.
+The app includes password-based accounts, HTTP-only sessions, first-owner
+bootstrap, organization membership checks, and role-based access checks. This
+is not an independent security audit or enterprise production certification.
+Before using real business data, review tenant isolation and role enforcement,
+add operational monitoring and tested backups, and complete an appropriate
+security and privacy review. Validate tenant isolation for every new route and
+migration.
 
 ## Roadmap
 

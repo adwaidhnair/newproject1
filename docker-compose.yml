@@ -5,14 +5,57 @@ services:
     environment:
       POSTGRES_DB: erp_intel
       POSTGRES_USER: erp_intel
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the deployment environment}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Generate POSTGRES_PASSWORD before starting}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Generate APP_DB_PASSWORD before starting}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U erp_intel -d erp_intel"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 1m
+
+  db-roles:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: erp_intel
+      PGDATABASE: erp_intel
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Generate POSTGRES_PASSWORD before starting}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Generate APP_DB_PASSWORD before starting}
+    volumes:
+      - ./backend/postgres-init/01-app-role.sh:/run/app-role-init.sh:ro
+    command: ["/bin/sh", "/run/app-role-init.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  migrate:
+    build:
+      context: ./backend
+    restart: "no"
+    command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+    environment:
+      ENVIRONMENT: production
+      AUTO_CREATE_TABLES: "false"
+      DATABASE_URL: postgresql+psycopg://erp_intel:${POSTGRES_PASSWORD:?Generate POSTGRES_PASSWORD before starting}@db:5432/erp_intel
+    depends_on:
+      db-roles:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
 
   api:
     build:
@@ -21,14 +64,76 @@ services:
     environment:
       ENVIRONMENT: production
       AUTO_CREATE_TABLES: "false"
-      DATABASE_URL: postgresql+psycopg://erp_intel:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the deployment environment}@db:5432/erp_intel
-      ERP_API_KEY: ${ERP_API_KEY:?Set ERP_API_KEY to a long random secret}
-      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS to the deployed frontend origin}
+      DATABASE_URL: postgresql+psycopg://erp_intel_app:${APP_DB_PASSWORD:?Generate APP_DB_PASSWORD before starting}@db:5432/erp_intel
+      AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:?Generate AUTH_TOKEN_SECRET before starting}
+      BOOTSTRAP_SETUP_TOKEN: ${BOOTSTRAP_SETUP_TOKEN:?Generate BOOTSTRAP_SETUP_TOKEN before starting}
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS to the HTTPS site origin}
+      FORWARDED_ALLOW_IPS: 172.16.0.0/12
+      DB_POOL_SIZE: 5
+      DB_MAX_OVERFLOW: 10
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    expose:
+      - "8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  web:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    expose:
+      - "8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN to the public DNS name}
     ports:
-      - "127.0.0.1:8000:8000"
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./ops/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
 
 volumes:
   postgres_data:
+  caddy_data:
+  caddy_config:

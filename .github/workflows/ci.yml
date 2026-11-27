@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend tests and migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+        working-directory: backend
+      - name: Compile backend
+        run: python -m compileall -q app migrations seed_data.py
+        working-directory: backend
+      - name: Run backend tests
+        run: python -m unittest discover -s tests -v
+        working-directory: backend
+      - name: Apply and verify migrations on a fresh database
+        run: |
+          DATABASE_URL=sqlite:///./ci_migration_check.db python -m alembic -c alembic.ini upgrade head
+          DATABASE_URL=sqlite:///./ci_migration_check.db python -m alembic -c alembic.ini check
+        working-directory: backend
+
+  frontend:
+    name: Frontend build and dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm audit --omit=dev --audit-level=high
+
+  deployment:
+    name: Deployment configuration and image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose configuration
+        run: docker compose --env-file .env.production.example config --quiet
+      - name: Build backend image
+        run: docker build --file backend/Dockerfile --tag erp-intel-api:ci backend
+      - name: Build frontend image
+        run: docker build --file frontend/Dockerfile --tag erp-intel-web:ci frontend
